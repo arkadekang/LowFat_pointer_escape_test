@@ -76,6 +76,9 @@ build_llvm()
         CC=$CLANG CXX=$CLANGXX cmake ../llvm-4.0.0.src/ \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=install \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            -DCMAKE_CXX_FLAGS="-Wno-narrowing" \
+            -DCMAKE_C_FLAGS="-Wno-narrowing" \
             -DBUILD_SHARED_LIBS=ON \
             -DLLVM_TARGETS_TO_BUILD="X86"
     fi
