@@ -77,6 +77,8 @@ static std::map<std::string, size_t> escapeCallFuncMap;
  * Type decls.
  */
 typedef vector<tuple<Instruction *, Value *, unsigned>> Plan;
+// 모든 escape 이벤트를 전역적으로 누적
+static Plan allEscapes;
 typedef map<Value *, Value *> PtrInfo;
 
 /*
@@ -915,6 +917,9 @@ static void addToPlan(const TargetLibraryInfo *TLI, const DataLayout *DL,
     // 모든 포인터 사용 횟수 카운트
     totalPointerUseCount++;
 
+    // 전역 allEscapes에도 누적 (무조건 기록)
+    allEscapes.push_back(make_tuple(I, Ptr, kind));
+
     if (bounds.isInBounds(size))
         return;
     plan.push_back(make_tuple(I, Ptr, kind));
@@ -929,9 +934,15 @@ static void getInterestingInsts(const TargetLibraryInfo *TLI,
     if (StoreInst *Store = dyn_cast<StoreInst>(I))
     {
         Value *Val = Store->getValueOperand();
-        if (Val->getType()->isPointerTy())
-            addToPlan(TLI, DL, boundsInfo, plan, I, Val,
-                LOWFAT_OOB_ERROR_ESCAPE_STORE);
+        // ESCAPE_STORE: NULL 포인터 store는 제외
+        if (Val->getType()->isPointerTy()) {
+            if (isa<ConstantPointerNull>(Val)) {
+                // NULL store는 escape로 간주하지 않음
+            } else {
+                addToPlan(TLI, DL, boundsInfo, plan, I, Val,
+                    LOWFAT_OOB_ERROR_ESCAPE_STORE);
+            }
+        }
         Ptr = Store->getPointerOperand();
         kind = LOWFAT_OOB_ERROR_WRITE;
     }
@@ -1894,15 +1905,38 @@ struct LowFat : public ModulePass
 
 // 통계 출력 함수: runOnModule에서 호출
 static void printLowFatStats() {
+
     llvm::errs() << "[LowFat] Total pointer uses: " << totalPointerUseCount << "\n";
     llvm::errs() << "[LowFat] Pointer escape counts (type: count):\n";
-    llvm::errs() << "  UNKNOWN: " << escapeCounts[LOWFAT_OOB_ERROR_UNKNOWN] << "\n";
-    llvm::errs() << "  READ: " << escapeCounts[LOWFAT_OOB_ERROR_READ] << "\n";
-    llvm::errs() << "  WRITE: " << escapeCounts[LOWFAT_OOB_ERROR_WRITE] << "\n";
-    llvm::errs() << "  MEMSET: " << escapeCounts[LOWFAT_OOB_ERROR_MEMSET] << "\n";
-    llvm::errs() << "  MEMCPY: " << escapeCounts[LOWFAT_OOB_ERROR_MEMCPY] << "\n";
+    // Helper lambda: ESCAPE_CALL 제외, 나머지 escape 종류별로 소스코드 위치 출력
+    auto printEscapesWithLocation = [](unsigned kind, const char *kindName) {
+        size_t count = 0;
+        for (const auto &t : allEscapes) {
+            if (std::get<2>(t) == kind) count++;
+        }
+        llvm::errs() << "  " << kindName << ": " << count << "\n";
+        for (const auto &t : allEscapes) {
+            if (std::get<2>(t) == kind) {
+                Instruction *I = std::get<0>(t);
+                const DebugLoc &DL = I->getDebugLoc();
+                if (DL) {
+                    llvm::errs() << "      -> line " << DL.getLine() << ", " << I->getParent()->getParent()->getName() << ": ";
+                } else {
+                    llvm::errs() << "      -> (no debug info), " << I->getParent()->getParent()->getName() << ": ";
+                }
+                I->print(llvm::errs());
+                llvm::errs() << "\n";
+            }
+        }
+    };
 
-    // ESCAPE_CALL breakdown
+    printEscapesWithLocation(LOWFAT_OOB_ERROR_UNKNOWN, "UNKNOWN");
+    printEscapesWithLocation(LOWFAT_OOB_ERROR_READ, "READ");
+    printEscapesWithLocation(LOWFAT_OOB_ERROR_WRITE, "WRITE");
+    printEscapesWithLocation(LOWFAT_OOB_ERROR_MEMSET, "MEMSET");
+    printEscapesWithLocation(LOWFAT_OOB_ERROR_MEMCPY, "MEMCPY");
+
+    // ESCAPE_CALL은 기존 방식 유지
     llvm::errs() << "  ESCAPE_CALL: " << escapeCounts[LOWFAT_OOB_ERROR_ESCAPE_CALL] << "\n";
     // Internal/external split
     size_t internalCount = 0, externalCount = 0;
@@ -1931,10 +1965,10 @@ static void printLowFatStats() {
         }
     }
 
-    llvm::errs() << "  ESCAPE_RETURN: " << escapeCounts[LOWFAT_OOB_ERROR_ESCAPE_RETURN] << "\n";
-    llvm::errs() << "  ESCAPE_STORE: " << escapeCounts[LOWFAT_OOB_ERROR_ESCAPE_STORE] << "\n";
-    llvm::errs() << "  ESCAPE_PTR2INT: " << escapeCounts[LOWFAT_OOB_ERROR_ESCAPE_PTR2INT] << "\n";
-    llvm::errs() << "  ESCAPE_INSERT: " << escapeCounts[LOWFAT_OOB_ERROR_ESCAPE_INSERT] << "\n";
+    printEscapesWithLocation(LOWFAT_OOB_ERROR_ESCAPE_RETURN, "ESCAPE_RETURN");
+    printEscapesWithLocation(LOWFAT_OOB_ERROR_ESCAPE_STORE, "ESCAPE_STORE");
+    printEscapesWithLocation(LOWFAT_OOB_ERROR_ESCAPE_PTR2INT, "ESCAPE_PTR2INT");
+    printEscapesWithLocation(LOWFAT_OOB_ERROR_ESCAPE_INSERT, "ESCAPE_INSERT");
 }
 
 char LowFat::ID = 0;
