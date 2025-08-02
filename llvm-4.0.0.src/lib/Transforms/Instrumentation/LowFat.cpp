@@ -58,6 +58,10 @@ extern "C"
 using namespace llvm;
 using namespace std;
 
+static size_t totalDynamicAllocs = 0;
+static const int NUM_ESCAPE_KINDS = 32; // 충분히 크게 잡음
+static size_t escapeCounts[NUM_ESCAPE_KINDS] = {0};
+
 /*
  * Type decls.
  */
@@ -213,6 +217,9 @@ static cl::opt<bool> option_no_abort(
 static cl::opt<bool> option_signal(
     "lowfat-signal",
     cl::desc("Raise SIGILL if an OOB memory error occurs"));
+static cl::opt<bool> option_report_ptresc(
+    "lowfat-report-ptresc",
+    cl::desc("Report dynamic allocation and pointer escape statistics"));
 
 /*
  * Fool-proof "leading zero count" implementation.  Also works for "0".
@@ -537,6 +544,10 @@ static Bounds getConstantPtrBounds(const TargetLibraryInfo *TLI,
 static Bounds getPtrBounds(const TargetLibraryInfo *TLI, const DataLayout *DL,
     Value *Ptr, BoundsInfo &boundsInfo)
 {
+    // 동적할당 포인터 카운트
+    if (isMemoryAllocation(TLI, Ptr)) {
+        totalDynamicAllocs++;
+    }
     auto i = boundsInfo.find(Ptr);
     if (i != boundsInfo.end())
         return i->second;
@@ -888,6 +899,10 @@ static void addToPlan(const TargetLibraryInfo *TLI, const DataLayout *DL,
     if (bounds.isInBounds(size))
         return;
     plan.push_back(make_tuple(I, Ptr, kind));
+
+    // escape 타입별 카운트
+    if (kind < NUM_ESCAPE_KINDS)
+        escapeCounts[kind]++;
 }
 static void getInterestingInsts(const TargetLibraryInfo *TLI,
     const DataLayout *DL, BoundsInfo &boundsInfo, Instruction *I, Plan &plan)
@@ -1797,6 +1812,22 @@ struct LowFat : public ModulePass
                     optimizeMalloc(&M, &I, dels);
             for (auto &I: dels)
                 I->eraseFromParent();
+        }
+
+        // 통계 출력
+        if (option_report_ptresc) {
+            errs() << "[LowFat] Total dynamic allocations: " << totalDynamicAllocs << "\n";
+            errs() << "[LowFat] Pointer escape counts (type: count):\n";
+            errs() << "  UNKNOWN: " << escapeCounts[LOWFAT_OOB_ERROR_UNKNOWN] << "\n";
+            errs() << "  READ: " << escapeCounts[LOWFAT_OOB_ERROR_READ] << "\n";
+            errs() << "  WRITE: " << escapeCounts[LOWFAT_OOB_ERROR_WRITE] << "\n";
+            errs() << "  MEMSET: " << escapeCounts[LOWFAT_OOB_ERROR_MEMSET] << "\n";
+            errs() << "  MEMCPY: " << escapeCounts[LOWFAT_OOB_ERROR_MEMCPY] << "\n";
+            errs() << "  ESCAPE_CALL: " << escapeCounts[LOWFAT_OOB_ERROR_ESCAPE_CALL] << "\n";
+            errs() << "  ESCAPE_RETURN: " << escapeCounts[LOWFAT_OOB_ERROR_ESCAPE_RETURN] << "\n";
+            errs() << "  ESCAPE_STORE: " << escapeCounts[LOWFAT_OOB_ERROR_ESCAPE_STORE] << "\n";
+            errs() << "  ESCAPE_PTR2INT: " << escapeCounts[LOWFAT_OOB_ERROR_ESCAPE_PTR2INT] << "\n";
+            errs() << "  ESCAPE_INSERT: " << escapeCounts[LOWFAT_OOB_ERROR_ESCAPE_INSERT] << "\n";
         }
 
         if (option_debug)
