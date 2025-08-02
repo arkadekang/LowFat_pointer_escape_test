@@ -1908,67 +1908,69 @@ static void printLowFatStats() {
 
     llvm::errs() << "[LowFat] Total pointer uses: " << totalPointerUseCount << "\n";
     llvm::errs() << "[LowFat] Pointer escape counts (type: count):\n";
-    // Helper lambda: ESCAPE_CALL 제외, 나머지 escape 종류별로 소스코드 위치 출력
-    auto printEscapesWithLocation = [](unsigned kind, const char *kindName) {
+    auto printEscapesWithLocation = [](unsigned kind, const char *kindName, bool showDetail) {
         size_t count = 0;
         for (const auto &t : allEscapes) {
             if (std::get<2>(t) == kind) count++;
         }
         llvm::errs() << "  " << kindName << ": " << count << "\n";
-        for (const auto &t : allEscapes) {
-            if (std::get<2>(t) == kind) {
-                Instruction *I = std::get<0>(t);
-                const DebugLoc &DL = I->getDebugLoc();
-                if (DL) {
-                    llvm::errs() << "      -> line " << DL.getLine() << ", " << I->getParent()->getParent()->getName() << ": ";
-                } else {
-                    llvm::errs() << "      -> (no debug info), " << I->getParent()->getParent()->getName() << ": ";
+        if (showDetail) {
+            for (const auto &t : allEscapes) {
+                if (std::get<2>(t) == kind) {
+                    Instruction *I = std::get<0>(t);
+                    const DebugLoc &DL = I->getDebugLoc();
+                    if (DL) {
+                        llvm::errs() << "      -> line " << DL.getLine() << ", " << I->getParent()->getParent()->getName() << ": ";
+                    } else {
+                        llvm::errs() << "      -> (no debug info), " << I->getParent()->getParent()->getName() << ": ";
+                    }
+                    I->print(llvm::errs());
+                    llvm::errs() << "\n";
                 }
-                I->print(llvm::errs());
-                llvm::errs() << "\n";
             }
         }
     };
 
-    printEscapesWithLocation(LOWFAT_OOB_ERROR_UNKNOWN, "UNKNOWN");
-    printEscapesWithLocation(LOWFAT_OOB_ERROR_READ, "READ");
-    printEscapesWithLocation(LOWFAT_OOB_ERROR_WRITE, "WRITE");
-    printEscapesWithLocation(LOWFAT_OOB_ERROR_MEMSET, "MEMSET");
-    printEscapesWithLocation(LOWFAT_OOB_ERROR_MEMCPY, "MEMCPY");
+    bool showDetail = option_debug;
+    printEscapesWithLocation(LOWFAT_OOB_ERROR_UNKNOWN, "UNKNOWN", showDetail);
+    printEscapesWithLocation(LOWFAT_OOB_ERROR_READ, "READ", showDetail);
+    printEscapesWithLocation(LOWFAT_OOB_ERROR_WRITE, "WRITE", showDetail);
+    printEscapesWithLocation(LOWFAT_OOB_ERROR_MEMSET, "MEMSET", showDetail);
+    printEscapesWithLocation(LOWFAT_OOB_ERROR_MEMCPY, "MEMCPY", showDetail);
 
-    // ESCAPE_CALL은 기존 방식 유지
+    // ESCAPE_CALL: count만 기본 출력, debug 옵션일 때만 상세 출력
     llvm::errs() << "  ESCAPE_CALL: " << escapeCounts[LOWFAT_OOB_ERROR_ESCAPE_CALL] << "\n";
-    // Internal/external split
-    size_t internalCount = 0, externalCount = 0;
-    std::map<std::string, size_t> internalMap, externalMap;
-    for (const auto &kv : escapeCallFuncMap) {
-        // Internal: not external declaration
-        auto it = externalLibEscapeMap.find(kv.first);
-        if (it != externalLibEscapeMap.end()) {
-            externalCount += kv.second;
-            externalMap[kv.first] = kv.second;
-        } else {
-            internalCount += kv.second;
-            internalMap[kv.first] = kv.second;
+    if (option_debug) {
+        size_t internalCount = 0, externalCount = 0;
+        std::map<std::string, size_t> internalMap, externalMap;
+        for (const auto &kv : escapeCallFuncMap) {
+            auto it = externalLibEscapeMap.find(kv.first);
+            if (it != externalLibEscapeMap.end()) {
+                externalCount += kv.second;
+                externalMap[kv.first] = kv.second;
+            } else {
+                internalCount += kv.second;
+                internalMap[kv.first] = kv.second;
+            }
         }
-    }
-    llvm::errs() << "      - Internal pointer escapes: " << internalCount << "\n";
-    if (!internalMap.empty()) {
-        for (const auto &kv : internalMap) {
-            llvm::errs() << "          -> " << kv.first << ": " << kv.second << "\n";
+        llvm::errs() << "      - Internal pointer escapes: " << internalCount << "\n";
+        if (!internalMap.empty()) {
+            for (const auto &kv : internalMap) {
+                llvm::errs() << "          -> " << kv.first << ": " << kv.second << "\n";
+            }
         }
-    }
-    llvm::errs() << "      - External library pointer escapes: " << externalCount << "\n";
-    if (!externalMap.empty()) {
-        for (const auto &kv : externalMap) {
-            llvm::errs() << "          -> " << kv.first << ": " << kv.second << "\n";
+        llvm::errs() << "      - External library pointer escapes: " << externalCount << "\n";
+        if (!externalMap.empty()) {
+            for (const auto &kv : externalMap) {
+                llvm::errs() << "          -> " << kv.first << ": " << kv.second << "\n";
+            }
         }
     }
 
-    printEscapesWithLocation(LOWFAT_OOB_ERROR_ESCAPE_RETURN, "ESCAPE_RETURN");
-    printEscapesWithLocation(LOWFAT_OOB_ERROR_ESCAPE_STORE, "ESCAPE_STORE");
-    printEscapesWithLocation(LOWFAT_OOB_ERROR_ESCAPE_PTR2INT, "ESCAPE_PTR2INT");
-    printEscapesWithLocation(LOWFAT_OOB_ERROR_ESCAPE_INSERT, "ESCAPE_INSERT");
+    printEscapesWithLocation(LOWFAT_OOB_ERROR_ESCAPE_RETURN, "ESCAPE_RETURN", showDetail);
+    printEscapesWithLocation(LOWFAT_OOB_ERROR_ESCAPE_STORE, "ESCAPE_STORE", showDetail);
+    printEscapesWithLocation(LOWFAT_OOB_ERROR_ESCAPE_PTR2INT, "ESCAPE_PTR2INT", showDetail);
+    printEscapesWithLocation(LOWFAT_OOB_ERROR_ESCAPE_INSERT, "ESCAPE_INSERT", showDetail);
 }
 
 char LowFat::ID = 0;
