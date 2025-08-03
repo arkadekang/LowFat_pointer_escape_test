@@ -61,8 +61,8 @@ using namespace std;
 static void printLowFatStats();
 
 // 외부 라이브러리 escape 카운트 및 함수명별 escape 기록
-static size_t externalLibEscapeCount = 0;
 static std::map<std::string, size_t> externalLibEscapeMap;
+
 
 // 동적할당 포인터 및 파생 포인터 사용 횟수 카운트
 static size_t totalPointerUseCount = 0;
@@ -914,8 +914,36 @@ static void addToPlan(const TargetLibraryInfo *TLI, const DataLayout *DL,
     if (kind < NUM_ESCAPE_KINDS)
         escapeCounts[kind]++;
 
-    // 모든 포인터 사용 횟수 카운트
-    totalPointerUseCount++;
+
+
+    // ESCAPE_CALL: 외부/내부 escape 카운트 및 함수명별 escape 기록 (포인터 인자별로 카운트)
+    if (kind == LOWFAT_OOB_ERROR_ESCAPE_CALL) {
+        Instruction *Inst = I;
+        Function *F = nullptr;
+        std::string funcName = "(indirect)";
+        if (CallInst *Call = dyn_cast<CallInst>(Inst)) {
+            F = Call->getCalledFunction();
+        } else if (InvokeInst *Invoke = dyn_cast<InvokeInst>(Inst)) {
+            F = Invoke->getCalledFunction();
+        }
+        if (F) funcName = F->getName().str();
+        bool isExternal = (F != nullptr && F->isDeclaration() && F->hasExternalLinkage());
+        // 포인터를 반환하는 함수는 외부 escape 카운트에서 제외
+        if (isExternal && F && !F->getReturnType()->isPointerTy()) {
+            externalLibEscapeMap[funcName]++;
+        }
+        escapeCallFuncMap[funcName]++;
+        totalPointerUseCount++;
+    }
+    // ESCAPE_RETURN, ESCAPE_STORE, ESCAPE_PTR2INT, ESCAPE_INSERT도 내부 escape로 카운트
+    if (kind == LOWFAT_OOB_ERROR_ESCAPE_RETURN  || 
+        kind == LOWFAT_OOB_ERROR_ESCAPE_STORE   || 
+        kind == LOWFAT_OOB_ERROR_ESCAPE_PTR2INT || 
+        kind == LOWFAT_OOB_ERROR_ESCAPE_INSERT) {
+        
+       // 모든 포인터 사용 횟수 카운트
+       totalPointerUseCount++;
+    }
 
     // 전역 allEscapes에도 누적 (무조건 기록)
     allEscapes.push_back(make_tuple(I, Ptr, kind));
@@ -1001,24 +1029,11 @@ static void getInterestingInsts(const TargetLibraryInfo *TLI,
         Function *F = Call->getCalledFunction();
         if (F != nullptr && F->doesNotAccessMemory())
             return;
-        bool isExternal = (F != nullptr && F->isDeclaration() && F->hasExternalLinkage());
-        std::string funcName = F ? F->getName().str() : "(indirect)";
-        // 포인터를 반환하는 함수는 외부 escape 카운트에서 제외
-        if (isExternal && F && !F->getReturnType()->isPointerTy()) {
-            for (unsigned i = 0; i < Call->getNumArgOperands(); i++) {
-                Value *Arg = Call->getArgOperand(i);
-                if (Arg->getType()->isPointerTy()) {
-                    externalLibEscapeCount++;
-                    externalLibEscapeMap[funcName]++;
-                }
-            }
-        }
         for (unsigned i = 0; i < Call->getNumArgOperands(); i++) {
             Value *Arg = Call->getArgOperand(i);
             if (Arg->getType()->isPointerTy()) {
                 addToPlan(TLI, DL, boundsInfo, plan, I, Arg,
                     LOWFAT_OOB_ERROR_ESCAPE_CALL);
-                escapeCallFuncMap[funcName]++;
             }
         }
         return;
@@ -1028,24 +1043,11 @@ static void getInterestingInsts(const TargetLibraryInfo *TLI,
         Function *F = Invoke->getCalledFunction();
         if (F != nullptr && F->doesNotAccessMemory())
             return;
-        bool isExternal = (F != nullptr && F->isDeclaration() && F->hasExternalLinkage());
-        std::string funcName = F ? F->getName().str() : "(indirect)";
-        // 포인터를 반환하는 함수는 외부 escape 카운트에서 제외
-        if (isExternal && F && !F->getReturnType()->isPointerTy()) {
-            for (unsigned i = 0; i < Invoke->getNumArgOperands(); i++) {
-                Value *Arg = Invoke->getArgOperand(i);
-                if (Arg->getType()->isPointerTy()) {
-                    externalLibEscapeCount++;
-                    externalLibEscapeMap[funcName]++;
-                }
-            }
-        }
         for (unsigned i = 0; i < Invoke->getNumArgOperands(); i++) {
             Value *Arg = Invoke->getArgOperand(i);
             if (Arg->getType()->isPointerTy()) {
                 addToPlan(TLI, DL, boundsInfo, plan, I, Arg,
                     LOWFAT_OOB_ERROR_ESCAPE_CALL);
-                escapeCallFuncMap[funcName]++;
             }
         }
         return;
@@ -1909,11 +1911,7 @@ static void printLowFatStats() {
     llvm::errs() << "[LowFat] Total pointer uses: " << totalPointerUseCount << "\n";
     llvm::errs() << "[LowFat] Pointer escape counts (type: count):\n";
     auto printEscapesWithLocation = [](unsigned kind, const char *kindName, bool showDetail) {
-        size_t count = 0;
-        for (const auto &t : allEscapes) {
-            if (std::get<2>(t) == kind) count++;
-        }
-        llvm::errs() << "  " << kindName << ": " << count << "\n";
+        llvm::errs() << "  " << kindName << ": " << escapeCounts[kind] << "\n";
         if (showDetail) {
             for (const auto &t : allEscapes) {
                 if (std::get<2>(t) == kind) {
@@ -1932,11 +1930,6 @@ static void printLowFatStats() {
     };
 
     bool showDetail = option_debug;
-    printEscapesWithLocation(LOWFAT_OOB_ERROR_UNKNOWN, "UNKNOWN", showDetail);
-    printEscapesWithLocation(LOWFAT_OOB_ERROR_READ, "READ", showDetail);
-    printEscapesWithLocation(LOWFAT_OOB_ERROR_WRITE, "WRITE", showDetail);
-    printEscapesWithLocation(LOWFAT_OOB_ERROR_MEMSET, "MEMSET", showDetail);
-    printEscapesWithLocation(LOWFAT_OOB_ERROR_MEMCPY, "MEMCPY", showDetail);
 
     // ESCAPE_CALL: count만 기본 출력, debug 옵션일 때만 상세 출력
     llvm::errs() << "  ESCAPE_CALL: " << escapeCounts[LOWFAT_OOB_ERROR_ESCAPE_CALL] << "\n";
