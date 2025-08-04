@@ -80,6 +80,8 @@ build_llvm()
             -DCMAKE_CXX_FLAGS="-Wno-narrowing" \
             -DCMAKE_C_FLAGS="-Wno-narrowing" \
             -DBUILD_SHARED_LIBS=ON \
+            -DLLVM_ENABLE_RUNTIMES="openmp" \
+            -DLLVM_TOOL_OPENMP_BUILD=ON \
             -DLLVM_TARGETS_TO_BUILD="X86"
     fi
     make -j `nproc` install install-clang

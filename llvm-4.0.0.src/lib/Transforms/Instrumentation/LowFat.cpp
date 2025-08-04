@@ -66,6 +66,7 @@ static std::map<std::string, size_t> externalLibEscapeMap;
 
 // 동적할당 포인터 및 파생 포인터 사용 횟수 카운트
 static size_t totalPointerUseCount = 0;
+static size_t totalPointerEscCount = 0;
 
 static size_t totalDynamicAllocs = 0;
 static const int NUM_ESCAPE_KINDS = 32; // 충분히 크게 잡음
@@ -895,6 +896,11 @@ static void addToPlan(const TargetLibraryInfo *TLI, const DataLayout *DL,
     BoundsInfo &boundsInfo, Plan &plan, Instruction *I, Value *Ptr,
     unsigned kind)
 {
+    if (!I || !Ptr) {
+        llvm::errs() << "[LowFat] Warning: Null Instruction or Ptr encountered.\n";
+        return;
+    }
+
     if (filterPtr(kind))
         return;
     Bounds bounds = getPtrBounds(TLI, DL, Ptr, boundsInfo);
@@ -933,7 +939,7 @@ static void addToPlan(const TargetLibraryInfo *TLI, const DataLayout *DL,
             externalLibEscapeMap[funcName]++;
         }
         escapeCallFuncMap[funcName]++;
-        totalPointerUseCount++;
+        totalPointerEscCount++;
     }
     // ESCAPE_RETURN, ESCAPE_STORE, ESCAPE_PTR2INT, ESCAPE_INSERT도 내부 escape로 카운트
     if (kind == LOWFAT_OOB_ERROR_ESCAPE_RETURN  || 
@@ -942,7 +948,7 @@ static void addToPlan(const TargetLibraryInfo *TLI, const DataLayout *DL,
         kind == LOWFAT_OOB_ERROR_ESCAPE_INSERT) {
         
        // 모든 포인터 사용 횟수 카운트
-       totalPointerUseCount++;
+       totalPointerEscCount++;
     }
 
     // 전역 allEscapes에도 누적 (무조건 기록)
@@ -1029,12 +1035,12 @@ static void getInterestingInsts(const TargetLibraryInfo *TLI,
         Function *F = Call->getCalledFunction();
         if (F != nullptr && F->doesNotAccessMemory())
             return;
-        for (unsigned i = 0; i < Call->getNumArgOperands(); i++) {
+        for (unsigned i = 0; i < Call->getNumArgOperands(); i++)
+        {
             Value *Arg = Call->getArgOperand(i);
-            if (Arg->getType()->isPointerTy()) {
+            if (Arg->getType()->isPointerTy())
                 addToPlan(TLI, DL, boundsInfo, plan, I, Arg,
                     LOWFAT_OOB_ERROR_ESCAPE_CALL);
-            }
         }
         return;
     }
@@ -1043,12 +1049,12 @@ static void getInterestingInsts(const TargetLibraryInfo *TLI,
         Function *F = Invoke->getCalledFunction();
         if (F != nullptr && F->doesNotAccessMemory())
             return;
-        for (unsigned i = 0; i < Invoke->getNumArgOperands(); i++) {
+        for (unsigned i = 0; i < Invoke->getNumArgOperands(); i++)
+        {
             Value *Arg = Invoke->getArgOperand(i);
-            if (Arg->getType()->isPointerTy()) {
+            if (Arg->getType()->isPointerTy())
                 addToPlan(TLI, DL, boundsInfo, plan, I, Arg,
                     LOWFAT_OOB_ERROR_ESCAPE_CALL);
-            }
         }
         return;
     }
@@ -1868,7 +1874,23 @@ struct LowFat : public ModulePass
                 I->eraseFromParent();
         }
 
-        // 통계 출력
+        // 모든 변환/분석이 끝난 후, 통계 출력 직전에 포인터 사용 횟수 집계
+        totalPointerUseCount = 0;
+        for (auto &F : M) {
+            if (F.isDeclaration()) continue;
+            for (auto &BB : F) {
+                for (auto &I : BB) {
+                    for (unsigned oi = 0; oi < I.getNumOperands(); ++oi) {
+                        Value *Op = I.getOperand(oi);
+                        if (Op && Op->getType()->isPointerTy()) {
+                            totalPointerUseCount += Op->getNumUses();
+                        }
+                    }
+                }
+            }
+        }
+
+        // 옵션에 따라 통계 출력
         if (option_report_ptresc) {
             printLowFatStats();
         }
@@ -1909,7 +1931,7 @@ struct LowFat : public ModulePass
 static void printLowFatStats() {
 
     llvm::errs() << "[LowFat] Total pointer uses: " << totalPointerUseCount << "\n";
-    llvm::errs() << "[LowFat] Pointer escape counts (type: count):\n";
+    llvm::errs() << "[LowFat] Pointer escape counts: " << totalPointerEscCount << "\n";
     auto printEscapesWithLocation = [](unsigned kind, const char *kindName, bool showDetail) {
         llvm::errs() << "  " << kindName << ": " << escapeCounts[kind] << "\n";
         if (showDetail) {
