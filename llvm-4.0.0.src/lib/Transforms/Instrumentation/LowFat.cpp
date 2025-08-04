@@ -4,7 +4,7 @@
  *   _|        _|    _|  _|      _|      _|  _|_|_|  _|    _|    _|
  *   _|        _|    _|    _|  _|  _|  _|    _|      _|    _|    _|
  *   _|_|_|_|    _|_|        _|      _|      _|        _|_|_|      _|_|
- * 
+ *
  * Gregory J. Duck.
  *
  * Copyright (c) 2018 The National University of Singapore.
@@ -68,7 +68,7 @@ static std::map<std::string, size_t> externalLibEscapeMap;
 static size_t totalPointerUseCount = 0;
 static size_t totalPointerEscCount = 0;
 
-static size_t totalDynamicAllocs = 0;
+//static size_t totalDynamicAllocs = 0;
 static const int NUM_ESCAPE_KINDS = 32; // 충분히 크게 잡음
 static size_t escapeCounts[NUM_ESCAPE_KINDS] = {0};
 // ESCAPE_CALL 함수명별 카운트
@@ -289,7 +289,7 @@ class LowFatWarning : public DiagnosticInfo
 {
     private:
         string msg;
-    
+
     public:
         LowFatWarning(const char *msg) : DiagnosticInfo(777, DS_Warning),
             msg(msg) { }
@@ -558,10 +558,10 @@ static Bounds getConstantPtrBounds(const TargetLibraryInfo *TLI,
 static Bounds getPtrBounds(const TargetLibraryInfo *TLI, const DataLayout *DL,
     Value *Ptr, BoundsInfo &boundsInfo)
 {
-    // 동적할당 포인터 카운트
-    if (isMemoryAllocation(TLI, Ptr)) {
-        totalDynamicAllocs++;
-    }
+    //// 동적할당 포인터 카운트
+    //if (isMemoryAllocation(TLI, Ptr)) {
+    //    totalDynamicAllocs++;
+    //}
     auto i = boundsInfo.find(Ptr);
     if (i != boundsInfo.end())
         return i->second;
@@ -712,7 +712,7 @@ static Constant *calcBasePtr(const TargetLibraryInfo *TLI, Function *F,
         case Instruction::ExtractElement:
         case Instruction::ExtractValue:
             // Assumed to be non-fat pointers:
-            BasePtr = 
+            BasePtr =
                 ConstantPointerNull::get(Type::getInt8PtrTy(CE->getContext()));
             break;
         default:
@@ -720,7 +720,7 @@ static Constant *calcBasePtr(const TargetLibraryInfo *TLI, Function *F,
             C->dump();
             C->getContext().diagnose(LowFatWarning(
                 "(BUG) unknown constant expression pointer type (base)"));
-            BasePtr = 
+            BasePtr =
                 ConstantPointerNull::get(Type::getInt8PtrTy(CE->getContext()));
             break;
         }
@@ -903,7 +903,7 @@ static void addToPlan(const TargetLibraryInfo *TLI, const DataLayout *DL,
 
     if (filterPtr(kind))
         return;
-    Bounds bounds = getPtrBounds(TLI, DL, Ptr, boundsInfo);
+    //Bounds bounds = getPtrBounds(TLI, DL, Ptr, boundsInfo);
     size_t size = 0;
     if (option_check_whole_access &&
             (kind == LOWFAT_OOB_ERROR_READ || kind == LOWFAT_OOB_ERROR_WRITE))
@@ -942,11 +942,11 @@ static void addToPlan(const TargetLibraryInfo *TLI, const DataLayout *DL,
         totalPointerEscCount++;
     }
     // ESCAPE_RETURN, ESCAPE_STORE, ESCAPE_PTR2INT, ESCAPE_INSERT도 내부 escape로 카운트
-    if (kind == LOWFAT_OOB_ERROR_ESCAPE_RETURN  || 
-        kind == LOWFAT_OOB_ERROR_ESCAPE_STORE   || 
-        kind == LOWFAT_OOB_ERROR_ESCAPE_PTR2INT || 
+    if (kind == LOWFAT_OOB_ERROR_ESCAPE_RETURN  ||
+        kind == LOWFAT_OOB_ERROR_ESCAPE_STORE   ||
+        kind == LOWFAT_OOB_ERROR_ESCAPE_PTR2INT ||
         kind == LOWFAT_OOB_ERROR_ESCAPE_INSERT) {
-        
+
        // 모든 포인터 사용 횟수 카운트
        totalPointerEscCount++;
     }
@@ -954,8 +954,8 @@ static void addToPlan(const TargetLibraryInfo *TLI, const DataLayout *DL,
     // 전역 allEscapes에도 누적 (무조건 기록)
     allEscapes.push_back(make_tuple(I, Ptr, kind));
 
-    if (bounds.isInBounds(size))
-        return;
+    //if (bounds.isInBounds(size))
+    //    return;
     plan.push_back(make_tuple(I, Ptr, kind));
 }
 static void getInterestingInsts(const TargetLibraryInfo *TLI,
@@ -972,6 +972,7 @@ static void getInterestingInsts(const TargetLibraryInfo *TLI,
         if (Val->getType()->isPointerTy()) {
             if (isa<ConstantPointerNull>(Val)) {
                 // NULL store는 escape로 간주하지 않음
+		return;
             } else {
                 addToPlan(TLI, DL, boundsInfo, plan, I, Val,
                     LOWFAT_OOB_ERROR_ESCAPE_STORE);
@@ -1092,7 +1093,7 @@ static void getInterestingInsts(const TargetLibraryInfo *TLI,
     else
         return;
 
-    addToPlan(TLI, DL, boundsInfo, plan, I, Ptr, kind); 
+    addToPlan(TLI, DL, boundsInfo, plan, I, Ptr, kind);
 }
 
 /*
@@ -1233,7 +1234,7 @@ static void addLowFatFuncs(Module *M)
         Value *BasePtr = builder.CreateIntToPtr(IBasePtr,
             builder.getInt8PtrTy());
         builder.CreateRet(BasePtr);
- 
+
         F->setOnlyReadsMemory();
         F->setDoesNotThrow();
         F->setLinkage(GlobalValue::InternalLinkage);
@@ -1246,7 +1247,7 @@ static void addLowFatFuncs(Module *M)
         BasicBlock *Entry  = BasicBlock::Create(M->getContext(), "", F);
         BasicBlock *Error  = BasicBlock::Create(M->getContext(), "", F);
         BasicBlock *Return = BasicBlock::Create(M->getContext(), "", F);
-        
+
         IRBuilder<> builder(Entry);
         auto i = F->getArgumentList().begin();
         Value *Info = &(*(i++));
@@ -1262,7 +1263,7 @@ static void addLowFatFuncs(Module *M)
             builder.getInt64Ty()->getPointerTo());
         Value *SizePtr = builder.CreateGEP(Sizes, Idx);
         Value *Size = builder.CreateAlignedLoad(SizePtr, sizeof(size_t));
-        
+
         // The check is: if (ptr - base > size - sizeof(*ptr)) error();
         Value *IPtr = builder.CreatePtrToInt(Ptr, builder.getInt64Ty());
         Value *Diff = builder.CreateSub(IPtr, IBasePtr);
@@ -1298,7 +1299,7 @@ static void addLowFatFuncs(Module *M)
                     {Info, Ptr, BasePtr});
                 Call->setDoesNotReturn();
                 builder2.CreateUnreachable();
-            }            
+            }
         }
         else
         {
@@ -1551,7 +1552,7 @@ static void makeGlobalVariableLowFatPtr(Module *M, GlobalVariable *GV)
     // may break some legacy code that depends on common symbols.
     if (GV->hasCommonLinkage())
         GV->setLinkage(llvm::GlobalValue::WeakAnyLinkage);
- 
+
     const DataLayout *DL = &M->getDataLayout();
     Type *Ty = GV->getType();
     PointerType *PtrTy = dyn_cast<PointerType>(Ty);
@@ -1606,7 +1607,7 @@ static void makeAllocaLowFatPtr(Module *M, Instruction *I)
     {
         // Simple+common case: fixed sized alloca:
         size_t size = DL->getTypeAllocSize(Ty) * ISize->getZExtValue();
-        
+
         // STEP (1): Align the stack:
         size_t idx = clzll(size);
         if (idx <= clzll(LOWFAT_MAX_STACK_ALLOC_SIZE))
